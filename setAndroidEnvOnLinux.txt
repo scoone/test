@@ -1,0 +1,8 @@
+打开终端输入:
+
+sudo apt-cache search android
+
+	sudo apt-get install android
+	sudo apt-get install androidsdk-ddms
+
+

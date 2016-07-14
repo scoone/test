@@ -7,10 +7,10 @@
 //============================================================================
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
-#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -23,6 +23,13 @@
 #include "NscreenPrivateProtocolData.h"
 
 typedef void * (threadFunc)(void *arg);
+
+typedef struct _streamSocketInfo
+{
+    int socketfd;
+    unsigned int port;
+	char ip[16];
+}stStreamSocketInfo;
 
 static pthread_t serviceMainThread;
 static pthread_t connectMainThread;
@@ -48,12 +55,77 @@ static pthread_t createThread(threadFunc looper, void *arg)
 	return id;
 }
 
+static int nsStreamSocketCommandProcess(const stStreamSocketInfo *ssocket, char *command)
+{
+	if('\0' == command[0]) //?????????
+	{
+		return 0xff;
+	}
 
+    int ret = 0;
+    char response[32] = {0};
+    char * s = strsep(&command, STREAM_PACKET_SPLIT);
+
+    switch(atoi(s))
+    {
+        case EN_CMD_ISONLINE:
+            snprintf(response, sizeof(response), "%d>>%s", EN_CMD_ISONLINE, ONLINE);
+//            ret = send(ssocket->socketfd, response, sizeof(response), 0);
+            break;
+        case EN_CMD_MEDIA_PLAY:
+        	if(s = strsep(&command, STREAM_PACKET_SPLIT))
+        	{
+        		printf("\t EN_CMD_MEDIA_PLAY: %s \n", s);
+        	}
+
+        	break;
+        case EN_CMD_KEY:
+        	do
+        	{
+        		s = strsep(&command, STREAM_PACKET_SPLIT);
+        	}while(command);
+        	printf("\t EN_CMD_KEY s: %s  \n", s);
+        	//deal with key
+        	break;
+        case EN_CMD_MUSE:
+        {
+        	int x = 0;
+        	int y = 0;
+        	do
+			{
+				s = strsep(&command, STREAM_PACKET_SPLIT);
+				if(s[0] != '\0')
+				{
+					break;
+				}
+			}while(command);
+        	x = atoi(s);
+
+        	do
+			{
+				s = strsep(&command, STREAM_PACKET_SPLIT);
+			}while(command);
+        	y = atoi(s);
+        	printf("\t EN_CMD_MUSE x,y: (%d,%d) \n", x,y);
+        	//deal with mouse
+        }
+        	break;
+        case EN_CMD_INPUTSTR:
+        	printf("\t EN_CMD_INPUTSTR : %s \n", s);
+        	break;
+        default:
+        	 printf("address is %s:%d (msg: %s) \n \t s:%s \n", ssocket->ip, ssocket->port, command, s);
+            break;
+    }
+
+    return ret;
+}
 
 static void* recvDataLoop(void *arg)
 {
 	NPP_TRACE;
-	int sock = *((int *)arg);
+    stStreamSocketInfo stSSInfo = *((stStreamSocketInfo *)arg);
+	int sock = stSSInfo.socketfd;
     int retval = 0;
     int heart_count = 0;
     fd_set rfds;
@@ -75,7 +147,7 @@ static void* recvDataLoop(void *arg)
                 len = recv(sock , buff, sizeof(buff), 0);
                 if( 0 == len)
                 {
-                    perror("\n recv zero len messg: ");
+                    perror("\n  recvDataLoop recv zero len messg: ");
                     break;
                 }
                 else if ( len == -1 )
@@ -84,20 +156,18 @@ static void* recvDataLoop(void *arg)
                     {
                         continue;
                     }
-                    perror("\n  recv error messg: ");
+                    perror("\n recvDataLoop  recv error messg: ");
                     break;
                 }
 
                 buff[len] = '\0';
                 heart_count = 0;
 
-                if(-1 == send(sock, "ok", sizeof("ok"), 0))
-                { // same as write(sock ,/*rev_rsp*/"ok",sizeof("ok")) in linux
-                	perror("\n  send fail!:");
-                    break;
+                if(-1 == nsStreamSocketCommandProcess(&stSSInfo, buff))
+                {
+                	perror("\n nsStreamSocketCommandProcess send fail!:");
+                	//break;
                 }
-
-                printf("recv------->%s \n", buff);
 
                 memset(buff,0,sizeof(buff));
             }
@@ -131,7 +201,6 @@ static void* recvDataLoop(void *arg)
 
 void *connectMainLoop(void *arg)
 {
-	NPP_TRACE;
 	int ret;
 	int mSock;
 	int connectSock;
@@ -172,20 +241,24 @@ void *connectMainLoop(void *arg)
 	mAddrSize = sizeof(connectIPAddr);
 	memset(&connectIPAddr, 0, mAddrSize);
 
+    stStreamSocketInfo stSSInfo;
+
 	while(1)
 	{
-		NPP_TRACE;
 		connectSock = accept(mSock, (struct sockaddr*)&connectIPAddr, &mAddrSize);
 		printf("connect ip = %s \n", inet_ntoa(connectIPAddr.sin_addr));
 		if(INVALID_SOCKET == connectSock)
 		{
 			perror("\n connectMainLoop accept socket error: ");
-			NPP_TRACE;
 			usleep(300*1000); // 300ms
 			continue;
 		}
 
-		createThread(recvDataLoop, (void*)&connectSock);
+        stSSInfo.socketfd = connectSock;
+        stSSInfo.port = ntohs(connectIPAddr.sin_port);
+        snprintf(stSSInfo.ip, sizeof(stSSInfo.ip), "%s", inet_ntoa(connectIPAddr.sin_addr));
+
+		createThread(recvDataLoop, (void*)&stSSInfo);
 	}
 
 GO_EXIT:
@@ -197,7 +270,7 @@ GO_EXIT:
 
 void nsPPServiceOnLine(void)
 {
-	stPPPacket stPacket = {"1", " ", "TV-100", "TV", "1"};
+	stDatagramPPPacket stPacket = {"1", " ", "TV-100", "TV", "1"};
 	char onLineMsg[PACKET_SIZE];
 	snprintf(onLineMsg, PACKET_SIZE, "%s:%s:%s:%s:%s:%s", stPacket.version, stPacket.packetNo, stPacket.senderName,
 			stPacket.senderType, stPacket.commandNo, stPacket.expand);
@@ -206,50 +279,66 @@ void nsPPServiceOnLine(void)
 	datagramSocketSend(onLineMsg, PACKET_SIZE);
 }
 
-stPPPacket nsPacketParse(char *packet, const char *split)
+stDatagramPPPacket nsDatagramPacketParse(char *packet, const char *split)
 {
-	stPPPacket stPacket;
-    char * s = strsep(&packet, PACKET_SPLIT);
+	stDatagramPPPacket stPacket;
+    char * s = strsep(&packet, split);
 
     if(s)
     {
     	snprintf(stPacket.version, sizeof(stPacket.version), "%s", s);
     }
 
-    s = strsep(&packet, PACKET_SPLIT);
+    s = strsep(&packet, split);
     if(s)
 	{
 		snprintf(stPacket.packetNo, sizeof(stPacket.packetNo), "%s", s);
 	}
 
-    s = strsep(&packet, PACKET_SPLIT);
+    s = strsep(&packet, split);
 	if(s)
 	{
 		snprintf(stPacket.senderName, sizeof(stPacket.senderName), "%s", s);
 	}
 
-	s = strsep(&packet, PACKET_SPLIT);
+	s = strsep(&packet, split);
 	if(s)
 	{
-		snprintf(stPacket.senderType ,  sizeof(stPacket.senderType), "%s", s);
+		snprintf(stPacket.senderType, sizeof(stPacket.senderType), "%s", s);
 	}
 
-	s = strsep(&packet, PACKET_SPLIT);
+	s = strsep(&packet, split);
 	if(s)
 	{
-		snprintf(stPacket.commandNo ,  sizeof(stPacket.commandNo), "%s", s);
+		snprintf(stPacket.commandNo, sizeof(stPacket.commandNo), "%s", s);
 	}
 
-	s = strsep(&packet, PACKET_SPLIT);
+	s = strsep(&packet, split);
 	if(s)
 	{
-		snprintf(stPacket.expand ,  sizeof(stPacket.expand), "%s", s);
+		snprintf(stPacket.expand, sizeof(stPacket.expand), "%s", s);
 	}
 
 	return stPacket;
 }
+/*
+static char *getTime(char *timeBuf)
+{
+    time_t timep;
+    struct tm *p =NULL;
+    time(&timep);
+    p=gmtime(&timep);
+        if (NULL == p) {
+         return NULL;
+     }
+     snprintf(timeBuf,BUFFERSIZE, "%02d:%02d:%02d:%02d:%02d:%02d",
+            p->tm_year % 100, p->tm_mon, p->tm_mday, p->tm_hour, p->tm_min, p->tm_sec);
 
-void nsCommandProcess(const stAddress *revcAddress , const char *command) /* command from pppacket commandNo */
+    return timeBuf;
+
+}
+*/
+void nsDatagramCommandProcess(const stAddress *revcAddress , const char *command) /* command from pppacket commandNo */
 {
 	//printf("command : %s\n", command);
 	switch(atoi(command))
@@ -268,11 +357,9 @@ void nsCommandProcess(const stAddress *revcAddress , const char *command) /* com
 
 void *serviceMainLoop(void *arg)
 {
-	NPP_TRACE;
-
 	datagramSocketInit(BROADCAST_ADDR, BROADCAST_PORT);
 
-	stPPPacket stPacketRecived;
+	stDatagramPPPacket stPacketRecived;
 	char msg[RECV_BUFFSIZE];
 	stAddress recvFrom;
 
@@ -281,8 +368,8 @@ void *serviceMainLoop(void *arg)
 		if(datagramSocketRecevie(&recvFrom, msg, RECV_BUFFSIZE) > 0)
 		{
 			//printf("msg : %s\n", msg);
-			stPacketRecived = nsPacketParse(msg, PACKET_SPLIT);
-			nsCommandProcess(&recvFrom, stPacketRecived.commandNo);
+			stPacketRecived = nsDatagramPacketParse(msg, DATAGRAM_PACKET_SPLIT);
+			nsDatagramCommandProcess(&recvFrom, stPacketRecived.commandNo);
 		}
 
 //		usleep(1000*1000); //1s   Don't sleep because datagram recevie is blocked
@@ -292,7 +379,6 @@ void *serviceMainLoop(void *arg)
 
 void nsPPServiceInit(void)
 {
-	NPP_TRACE;
 	serviceMainThread = createThread(serviceMainLoop, NULL);
 	connectMainThread = createThread(connectMainLoop, NULL);
 }

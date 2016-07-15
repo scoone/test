@@ -1,0 +1,3 @@
+
+elipse从3.4开始支持列编辑 alt+shift+a
+

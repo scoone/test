@@ -1,0 +1,33 @@
+android Studio是官方为了Android应用开发者而发布的IDE，它基于IntelliJ的IDEA。
+
+ 
+Android Studio的功能
+
+  灵活的基于Gradle的建构系统
+
+  针对不同手机编译多个版本的apk
+
+   代码模板功能构建出各种常用的应用
+
+   支持拖动编辑主题的富布局编辑器
+
+   lint工具可以捕捉到应用的性能、可用性、版本冲突或者其他问题
+
+   代码混淆和应用签名功能
+
+   内置 Google Cloud Platform 的支持，可以轻易的融入Google Cloud Messaging 和 App Engine支持
+
+   还有更多
+
+
+   在 Ubuntu 15.04 上安装 Android Studio
+
+   打开terminal，输入以下命令
+
+    sudo apt-add-repository ppa:paolorotolo/android-studio
+    sudo apt-get update
+    sudo apt-get install android-studio
+
+	如果要把Android Studio添加到启动栏，你需要如下操作
+
+	打开Android Studio，点击Configure选择Create Desktop Entry，这样Android Studio应该在dash中创建快捷方式了。

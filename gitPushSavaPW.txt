@@ -1,0 +1,5 @@
+git config --global credential.helper store
+
+git push
+input your name
+input your password

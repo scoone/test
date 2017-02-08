@@ -1,0 +1,115 @@
+package com.ubtechinc.cruzr.coreservices.ros;
+
+import java.util.ArrayList;
+
+import android.util.Log;
+
+
+public class RemoteControl {
+
+	static {
+		System.loadLibrary("RosControlJni");
+	}
+
+	public native int init();
+
+	public native int deinit();
+
+//	motion::locomotion
+	public native int moveToward(String packageName,float x, float y, float theta);
+
+	public native int moveTo(String packageName,float x, float y, float theta, int maxSpeed);
+
+	public native int isMoveActive();
+
+	public native int stopMove(String packageName);
+
+	public native Position getPosition(int useSensor);
+
+	public native float getMaxSpeed(int dir);
+
+//	motion::joint
+	public native int angleInterpolation(String packageName, String[] names, ArrayList<float[]> angles, ArrayList<float[]> times, int absolute);
+
+	public native int angleInterpolationWithSpeed(String packageName, String[] names, ArrayList<float[]> angles, float max_speed, int absolute);
+
+	public native int setAngles(String packageName, String[] names, float[] angles,  float[] times, int absolute);
+
+	public native int stopJoint(String packageName);
+
+	public native float getJointCurrentAngle(String name); 
+
+//	general
+	public native BatteryInfo getBatteryInfo();
+
+	public native String[] getBodyNames(String name);
+
+	public native String[] getSensorNames();
+
+	public native String[] getLimits(String name);
+
+	public native String getRosWifiIp();
+
+	public native int setRosWifi(String name, String password);
+
+	public native int startPS3joy();
+
+//	animation
+	public native int run(String packageName,String[] name);
+
+	public native int stopRun(String packageName);
+
+//	navigation
+	public native int navigateTo(String packageName,float x, float y, int maxSpeed);
+	public native int cancelNavigate();
+
+
+//	recharge
+	public native int gotoRecharge(float x, float y);
+
+	public native int leaveStation();
+
+//	map
+	public native int buildMap(int operate, int option);
+	public native int setCurrentMap(String name);
+	public native String getCurrentMap();
+
+	public native int syncToRos(float x, float y, float theta);
+
+	public native Position syncFromRos();
+
+// led
+    public native int ledSetOnOff(int onOff);
+    public native int ledSetWorkInfo(int mode, int status, int effect, int brightness, int color);
+
+//power off
+    public native int powerOffRos();
+
+	//	notify
+	public void notifyFeedbackStatus(String packageName, int sectionId, int status) {
+		Log.i("test-jni", "notifyFeedbackStatus packageName:" + packageName+ "sectionId:" + sectionId + "status:" + status);
+	}
+
+
+    public void notifyBatteryInfo(int sectionId, int battery, int voltage,int charging, int temperature) {
+		Log.i("test-jni", "batteryCallback" + "sectionId:" + sectionId + "battery:"+ battery + "charging:" + charging);
+	}
+
+
+    public void notifyNavigation(String packageName, int sectionId, int status,float x, float y, float theta) {
+        Log.i("test-jni", "navigaCallback packageName:" + packageName+ "sectionId:" + sectionId + "status:" + status + "x:" + x + "y:" + y + "theta:" + theta);
+	}
+
+	public void notifyWarn(String name, int reason) {
+		Log.i("test-jni", "notifyWarn" + "name:" + name + "reason:" + reason);
+	}
+
+	public interface Callback{
+		public void sendMessage(int val);
+	}
+
+	private Callback  callback;
+	public RemoteControl(Callback back){
+		callback = back;
+	}
+}

@@ -1,0 +1,941 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <assert.h>
+#include <jni.h>
+
+#include "ubt_common.h"
+
+#include "format_string_define.h"
+
+#include "com_ubtechinc_service_ros_RemoteControl.h"
+
+#include "init.h"
+#include "animation.h"
+#include "general.h"
+#include "locomotion.h"
+#include "map.h"
+#include "navigation.h"
+#include "recharge.h"
+#include "led.h"
+#include "power.h"
+#include "joint.h"
+
+
+#define JAVA_REMOTE_CTRL_CLASS_NAME "com/ubtechinc/cruzr/coreservices/ros/RemoteControl"
+#define JAVA_POSITION_CLASS_NAME "com/ubtechinc/cruzr/coreservices/ros/Position"
+#define JAVA_BATTERY_INFO_CLASS_NAME "com/ubtechinc/cruzr/coreservices/ros/BatteryInfo"
+
+typedef struct {
+	jobject thiz;
+	jmethodID feedbackStatusCBId;
+	jmethodID batteryInfoCBId;
+	jmethodID navigationCBId;
+	jmethodID warnCBId;
+}stCallbackSet;
+
+static JavaVM *gJavaVM;
+static stCallbackSet callbackSet;
+
+static JNIEnv* getJNIEnv(int* needsDetach) {
+    JNIEnv* env = NULL;
+    jint result = -1;
+
+    *needsDetach = 0;
+
+    if (gJavaVM->GetEnv((void**) &env, JNI_VERSION_1_4) != JNI_OK) {
+        int status = gJavaVM->AttachCurrentThread(&env, 0);
+        if (status < 0){
+            LOG_I("failed to attach current thread");
+            return NULL;
+        }
+        *needsDetach = 1;
+    }
+
+  //  LOG_I("GetEnv Success");
+    return env;
+}
+
+
+////callback Java function
+// void notifyFeedbackStatus(String packageName, int sectionId, int status)
+void doNotifyFeedbackStatus(const char * packageName, int sectionId, int status) {
+	LOG_I("---doNotifyFeedbackStatus---");
+	if(callbackSet.feedbackStatusCBId == NULL) {
+		 LOG_E("doNotifyFeedbackStatus -- feedbackStatusCBId is NULL");
+		 return;
+	}
+
+	int needsDetach = 0;
+	JNIEnv *env = getJNIEnv(&needsDetach);
+
+	if(env) {
+		jstring jPackageName = env->NewStringUTF(packageName);
+
+		env->CallVoidMethod(callbackSet.thiz, callbackSet.feedbackStatusCBId, jPackageName, sectionId, status);
+
+		jthrowable exception = env->ExceptionOccurred();
+		if (exception) {
+			env->ExceptionDescribe();
+		}
+
+		if(needsDetach) {
+			gJavaVM->DetachCurrentThread();
+		}
+	}
+}
+
+// void notifyBatteryInfo(int sectionId, int battery, int charging)
+void doNotifyBatteryInfo(int sectionId, int battery, int voltage,int charging, int temperature) {
+	LOG_I("---doNotifyBatteryInfo---");
+	if(callbackSet.batteryInfoCBId == NULL) {
+		 LOG_E("doNotifyBatteryInfo -- batteryInfoCBId is NULL");
+		 return;
+	}
+
+	int needsDetach = 0;
+	JNIEnv *env = getJNIEnv(&needsDetach);
+
+	if(env) {
+		env->CallVoidMethod(callbackSet.thiz, callbackSet.batteryInfoCBId, sectionId, battery, charging);
+
+		jthrowable exception = env->ExceptionOccurred();
+		if (exception) {
+			env->ExceptionDescribe();
+		}
+
+		if(needsDetach) {
+			gJavaVM->DetachCurrentThread();
+		}
+	}
+}
+//
+// void notifyNavigation(String packageName, int sectionId, int status,float x, float y, float z)
+void doNotifyNavigation(const char * packageName, int sectionId, int status,float x, float y, float theta) {
+	LOG_I("---doNotifyNavigation---");
+	if(callbackSet.navigationCBId == NULL) {
+		 LOG_E("doNotifyNavigation -- navigationCBId is NULL");
+		 return;
+	}
+
+	int needsDetach = 0;
+	JNIEnv *env = getJNIEnv(&needsDetach);
+
+	if(env) {
+		jstring pkgName = env->NewStringUTF(packageName);
+        env->CallVoidMethod(callbackSet.thiz, callbackSet.navigationCBId, pkgName, sectionId, status, x, y, theta);
+
+		jthrowable exception = env->ExceptionOccurred();
+		if (exception) {
+			env->ExceptionDescribe();
+		}
+
+		if(needsDetach) {
+			gJavaVM->DetachCurrentThread();
+		}
+	}
+}
+
+//void notifyWarn(String name, int reason)
+void doNotifyWarn(const char * name, int reason) {
+	LOG_I("---doNotifyWarn---");
+	if(callbackSet.warnCBId == NULL) {
+		 LOG_E("doNotifyWarn -- warnCBId is NULL");
+		 return;
+	}
+
+	int needsDetach = 0;
+	JNIEnv *env = getJNIEnv(&needsDetach);
+
+	if(env) {
+		jstring names = env->NewStringUTF(name);
+		env->CallVoidMethod(callbackSet.thiz, callbackSet.warnCBId, names, reason);
+
+		jthrowable exception = env->ExceptionOccurred();
+		if (exception) {
+			env->ExceptionDescribe();
+		}
+
+		if(needsDetach) {
+			gJavaVM->DetachCurrentThread();
+		}
+	}
+}
+
+void bindCallBacks(JNIEnv * env , jobject jobj) {
+	jclass jcls = env->GetObjectClass(jobj); //get Java class
+	callbackSet.feedbackStatusCBId = env->GetMethodID(jcls , "notifyFeedbackStatus" , "(Ljava/lang/String;II)V") ;//get a callback function
+        callbackSet.batteryInfoCBId = env->GetMethodID(jcls , "notifyBatteryInfo" , "(IIIII)V") ;
+	callbackSet.navigationCBId = env->GetMethodID(jcls , "notifyNavigation" , "(Ljava/lang/String;IIFFF)V") ;
+	callbackSet.warnCBId = env->GetMethodID(jcls , "notifyWarn" , "(Ljava/lang/String;I)V") ;
+	callbackSet.thiz = env->NewGlobalRef(jobj);
+}
+
+int init(JNIEnv*env, jobject jobj) {
+	jint ret = 0;
+    LOG_I("---init---v%s-(build: %s-%s)",SDK_VERSION,__DATE__,__TIME__);
+
+	bindCallBacks(env, jobj);
+
+	ret = initialization();
+
+	callback_set_t cb = {
+		doNotifyFeedbackStatus,
+		doNotifyBatteryInfo,
+		doNotifyNavigation,
+		doNotifyWarn,
+	};
+
+	add_callback(&cb);
+
+	return ret;
+}
+
+int deinit(JNIEnv*env, jobject jobj) {
+	jint ret = 0;
+	LOG_I("----deinit----");
+	ret = deinitialization();
+	return ret;
+}
+
+int moveToward(JNIEnv*env, jobject jobj, jstring packageName, float x, float y, float theta) {
+	LOG_I("----moveToward----");
+	jint ret = 0;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+	ret = move_toward(str, x, y, theta);
+	env->ReleaseStringUTFChars(packageName , str);
+
+	return ret;
+}
+
+int moveTo(JNIEnv*env, jobject jobj, jstring packageName, float x, float y, float theta, int maxSpeed) {
+	LOG_I("----moveTo----");
+	jint ret = 0;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+	ret = move_to(str, x, y, theta, maxSpeed);
+	env->ReleaseStringUTFChars(packageName , str);
+
+	return ret;
+}
+
+int isMoveActive(JNIEnv*env, jobject jobj){
+	LOG_I("----isMoveActive----");
+	return is_move_active();
+}
+
+int stopMove(JNIEnv*env, jobject jobj, jstring packageName) {
+	LOG_I("----stopMove----");
+
+	jint ret = 0;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+	ret = stop_move(str);
+	env->ReleaseStringUTFChars(packageName , str);
+	return ret;
+}
+
+jobject getPosition(JNIEnv*env, jobject jobj, int useSensor) {
+	LOG_I("----getPosition----");
+	jclass jPositionClass = env->FindClass(JAVA_POSITION_CLASS_NAME);
+	if(!jPositionClass)
+	{
+		LOG_E("FindClass --%s -- failed", JAVA_POSITION_CLASS_NAME);
+		return NULL;
+	}
+
+//	jmethodID constructFunc  = env->GetMethodID(jPositionClass,"<init>","()V");
+//	jobject pos = env->NewObject(jPositionClass, constructFunc);
+//	jfieldID pos_x = env->GetFieldID(jPositionClass,"x","F");
+//	env->SetIntField(jPositionClass ,pos_x , 1.0f);
+	float x, y, z;
+	get_position(useSensor, &x, &y, &z);
+
+	jmethodID constructFunc  = env->GetMethodID(jPositionClass,"<init>","(FFF)V");
+	jobject pos = env->NewObject(jPositionClass, constructFunc, x, y, z);
+
+	return pos;
+}
+
+float getMaxSpeed(JNIEnv*env, jobject jobj, int dir) {
+	LOG_I("----getMaxSpeed----");
+	return get_max_speed(dir);
+}
+
+jobject getBatteryInfo(JNIEnv*env, jobject jobj) {
+	LOG_I("----getBatteryInfo----");
+	jclass jBatteryInfoClass = env->FindClass(JAVA_BATTERY_INFO_CLASS_NAME);
+	if(!jBatteryInfoClass)
+	{
+		LOG_E("FindClass --%s -- failed", JAVA_BATTERY_INFO_CLASS_NAME);
+		return NULL;
+	}
+
+	battery_info_t stBatteryInfo = {0};
+	get_battery_info(&stBatteryInfo);
+
+    jmethodID constructFunc  = env->GetMethodID(jBatteryInfoClass,"<init>","(IIII)V");
+	jobject batteryInfo = env->NewObject(jBatteryInfoClass, constructFunc,
+		stBatteryInfo.battery_level, stBatteryInfo.voltage, stBatteryInfo.charge_status, stBatteryInfo.temperature);
+
+	return batteryInfo;
+}
+
+jobjectArray getBodyNames(JNIEnv*env, jobject jobj, jstring name) {
+	LOG_I("----getBodyNames----");
+
+	str_t *plist = (str_t *)malloc(MSGPACK_VALUE_STR_LEN*SERIATION_ARRAY_MAX);
+
+	if(NULL == plist){
+		LOG_E("%s => nameList malloc failed", __FUNCTION__);
+		return NULL;
+	}
+
+	int listcnt = 0;
+	const char * str = env->GetStringUTFChars(name , NULL);
+	get_body_names(str, (char *)plist, &listcnt);
+	env->ReleaseStringUTFChars(name , str);
+
+	jobjectArray strArray = NULL;
+
+	if(listcnt > 0) {
+		jclass strClass = env->FindClass("java/lang/String");
+		strArray= env->NewObjectArray(listcnt, strClass, 0);
+		jstring jstr;
+
+		for(int i = 0; i < listcnt; i++){
+			jstr = env->NewStringUTF(plist[i].str_a);
+			env->SetObjectArrayElement(strArray, i, jstr);//must input jstring
+		}
+	}
+
+	free(plist);
+
+	return strArray;
+}
+
+jobjectArray getSensorNames(JNIEnv*env, jobject jobj) {
+	LOG_I("----getSensorNames----");
+
+	str_t *plist = (str_t *)malloc(MSGPACK_VALUE_STR_LEN*SERIATION_ARRAY_MAX);
+
+	if(NULL == plist){
+		LOG_E("%s => nameList malloc failed", __FUNCTION__);
+		return NULL;
+	}
+
+	int listcnt = 0;
+	get_sensor_names((char *)plist, &listcnt);
+
+	jobjectArray strArray = NULL;
+
+	if(listcnt > 0) {
+		jclass strClass = env->FindClass("java/lang/String");
+		strArray= env->NewObjectArray(listcnt, strClass, 0);
+		jstring jstr;
+
+		for(int i = 0; i < listcnt; i++){
+			jstr = env->NewStringUTF(plist[i].str_a);
+			env->SetObjectArrayElement(strArray, i, jstr);//must input jstring
+		}
+	}
+
+	free(plist);
+
+	return strArray;
+}
+
+jobjectArray getLimits(JNIEnv*env, jobject jobj, jstring name) {
+	LOG_I("----getLimits----");
+
+	str_t *plist = (str_t *)malloc(MSGPACK_VALUE_STR_LEN*SERIATION_ARRAY_MAX);
+
+	if(NULL == plist){
+		LOG_E("%s => nameList malloc failed", __FUNCTION__);
+		return NULL;
+	}
+
+	int listcnt = 0;
+	const char * str = env->GetStringUTFChars(name , NULL);
+	get_limits(str, (char *)plist, &listcnt);
+	env->ReleaseStringUTFChars(name , str);
+
+	jobjectArray strArray = NULL;
+
+	if(listcnt > 0) {
+		jclass strClass = env->FindClass("java/lang/String");
+		strArray= env->NewObjectArray(listcnt, strClass, 0);
+		jstring jstr;
+
+		for(int i = 0; i < listcnt; i++){
+			jstr = env->NewStringUTF(plist[i].str_a);
+			env->SetObjectArrayElement(strArray, i, jstr);
+		}
+	}
+
+	free(plist);
+
+	return strArray;
+}
+
+jstring getRosWifiIp(JNIEnv*env, jobject jobj) {
+	LOG_I("----getRosWifiIp---- ");
+
+        char str_c[MSGPACK_VALUE_STR_LEN];
+        memset(str_c, 0, MSGPACK_VALUE_STR_LEN);
+
+        get_ros_wifi_ip(str_c);
+        LOG_I("----getRosWifiIp--2--%s ", str_c );
+
+        jstring jstr = env->NewStringUTF(str_c);
+        LOG_I("----getRosWifiIp----3 ");
+
+	return jstr;
+}
+
+int setRosWifi(JNIEnv*env, jobject jobj, jstring name, jstring password) {	
+	jint ret = 0;
+	const char *nameStr = env->GetStringUTFChars(name , NULL);
+	const char *passwordStr = env->GetStringUTFChars(password , NULL);
+	
+	ret = set_ros_wifi(nameStr, passwordStr);
+	LOG_I("----setRosWifi---name:%s | password:%s", nameStr, passwordStr);
+
+	env->ReleaseStringUTFChars(name , nameStr);
+	env->ReleaseStringUTFChars(password , passwordStr);
+	return ret;
+}
+
+int startPS3joy(JNIEnv*env, jobject jobj) {
+	LOG_I("----startPS3joy---- ");
+	return start_ps3_joy();
+}
+
+int run(JNIEnv*env, jobject jobj, jstring packageName, jobjectArray names) {
+	LOG_I("----run----");
+	jint ret = JNI_FALSE;
+
+	str_t *run_list =NULL;
+
+	int size = env->GetArrayLength(names);
+
+	if(size > 0) {
+		run_list = (str_t *)malloc(size*MSGPACK_VALUE_STR_LEN);
+		if(NULL == run_list){
+			LOG_E("%s => run_list malloc failed", __FUNCTION__);
+			return JNI_FALSE;
+		}
+
+		for(int i=0; i<size; i++) {
+			jstring strelement =(jstring)env->GetObjectArrayElement(names, i);
+			const char* chars=env->GetStringUTFChars(strelement, NULL);
+			snprintf(run_list[i].str_a, MSGPACK_VALUE_STR_LEN, "%s", chars);
+			env->ReleaseStringUTFChars(strelement , chars);
+		}
+
+		const char * str = env->GetStringUTFChars(packageName , NULL);
+
+		ret = start_run(str, run_list, size);
+
+		env->ReleaseStringUTFChars(packageName , str);
+
+		free(run_list);
+	}
+
+	return ret;
+}
+
+int stopRun(JNIEnv*env, jobject jobj, jstring packageName) {
+	LOG_I("----stopRun----");
+	jint ret = JNI_FALSE;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+
+	ret = stop_run(str);
+
+	env->ReleaseStringUTFChars(packageName , str);
+
+	return ret;
+}
+
+int navigateTo(JNIEnv*env, jobject jobj, jstring packageName, float x, float y, int maxSpeed) {
+	LOG_I("----navigateTo----");
+	jint ret = JNI_FALSE;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+
+	ret = navigate_to(str, x, y, maxSpeed);
+
+	env->ReleaseStringUTFChars(packageName , str);
+
+	return ret;
+}
+
+int cancelNavigate(JNIEnv*env, jobject jobj) {
+    LOG_I("----cancelNavigate----");
+    return navigate_cancel();
+}
+
+int gotoRecharge(JNIEnv*env, jobject jobj, float x, float y) {
+	LOG_I("----gotoRecharge----");
+	return goto_recharge(x, y);
+}
+
+int leaveStation(JNIEnv*env, jobject jobj) {
+	LOG_I("----leaveStation----");
+	return leave_station();
+}
+
+int buildMap(JNIEnv*env, jobject jobj, int operate, int option) {
+     LOG_I("----buildMap----");
+     return build_map((EN_MAP_OPERATE)operate, (EN_BUILD_MAP_OPTION)option);
+}
+
+int setCurrentMap(JNIEnv*env, jobject jobj, jstring name) {
+    LOG_I("----setCurrentMap----");
+    jint ret = JNI_FALSE;
+    const char * str = env->GetStringUTFChars(name , NULL);
+
+    ret = set_current_map(str);
+
+    env->ReleaseStringUTFChars(name , str);
+
+    return ret;
+}
+
+jstring getCurrentMap(JNIEnv*env, jobject jobj) {
+    LOG_I("----getCurrentMap----");
+
+    char str_c[MSGPACK_VALUE_STR_LEN];
+    memset(str_c, 0, MSGPACK_VALUE_STR_LEN);
+
+    get_current_map(str_c);
+    LOG_I("----getCurrentMap--2--%s ", str_c );
+    
+    jstring jstr = env->NewStringUTF(str_c);
+    LOG_I("----getCurrentMap----3 ");
+    
+    return jstr;
+}
+
+int syncToRos(JNIEnv*env, jobject jobj, float x, float y, float theta) {
+	LOG_I("----syncToRos----");
+	return sync_to_ros(x, y, theta);
+}
+
+jobject syncFromRos(JNIEnv*env, jobject jobj) {
+	LOG_I("----syncFromRos----");
+	jclass jPositionClass = env->FindClass(JAVA_POSITION_CLASS_NAME);
+	if(!jPositionClass)
+	{
+		LOG_E("FindClass --%s -- failed", JAVA_POSITION_CLASS_NAME);
+		return NULL;
+	}
+
+	jmethodID constructFunc  = env->GetMethodID(jPositionClass,"<init>","(FFF)V");
+	jobject pos = env->NewObject(jPositionClass, constructFunc, 1.0f, 2.0f, 3.0f);
+
+	return pos;
+}
+
+int ledSetOnOff(JNIEnv*env, jobject jobj, int onOff) {
+    LOG_I("----ledSetOnOff----");
+	return led_power_switch(onOff);
+}
+
+int ledSetWorkInfo(JNIEnv*env, jobject jobj, int mode, int status, int effect, int brightness, int color) {
+    LOG_I("----ledSetWorkInfo----");
+    led_info_t info;
+    info.work_mode = (EN_LED_WORK_MODE)mode;
+    info.work_status = (EN_LED_STATUS)status;
+    info.light_effect = (EN_LIGHT_EFFECT_STATUS)effect;
+    info.brightness = brightness;
+    info.color = (EN_LED_COLOR)color;
+
+    return led_set_work_info(&info);
+}
+
+int powerOffRos(JNIEnv*env, jobject jobj) {
+    LOG_I("----powerOffRos----");
+    return power_off_ros_system(POWER_OFF_NORMAL);
+}
+
+int angleInterpolation(JNIEnv*env, jobject jobj, jstring packageName, jobjectArray names, jobject angles, jobject times, int absolute) {
+    LOG_I("----angleInterpolation----");
+    jint ret = JNI_FALSE;
+
+    str_arr_t namelist = {0};
+    joint_double_arr_t angleslist ={0};
+    joint_double_arr_t timeslist ={0};
+
+	namelist.arr_num = env->GetArrayLength(names);
+	//class List
+	jclass angleslistCls = env->GetObjectClass(angles);
+	jmethodID listGet = env->GetMethodID(angleslistCls,"get","(I)Ljava/lang/Object;");
+	jmethodID listSize = env->GetMethodID(angleslistCls,"size","()I");
+	angleslist.arr_num = env->CallIntMethod(angles, listSize);
+
+	jclass timeslistCls = env->GetObjectClass(times);
+	jmethodID tlistGet = env->GetMethodID(timeslistCls,"get","(I)Ljava/lang/Object;");
+	jmethodID tlistSize = env->GetMethodID(timeslistCls,"size","()I");
+	timeslist.arr_num = env->CallIntMethod(times, tlistSize);
+
+	const char * packageNameStr = env->GetStringUTFChars(packageName , NULL);
+
+	if(namelist.arr_num <= 0 || angleslist.arr_num <= 0 || timeslist.arr_num <=0) {
+		LOG_E("%s => namelist.arr_num <= 0 || angleslist.arr_num <= 0 || timeslist.arr_num <=0", __FUNCTION__);
+		goto errExit;
+	}
+
+	namelist.str_arr = (str_t *)malloc(namelist.arr_num*MSGPACK_VALUE_STR_LEN);
+	if(NULL == namelist.str_arr) {
+		LOG_E("%s => namelist.str_arr malloc failed", __FUNCTION__);
+		goto errExit;
+		//return JNI_FALSE;
+	}
+
+	angleslist.joint_arr = (base_double_arr_t *)malloc(sizeof(base_double_arr_t)*angleslist.arr_num);
+	if(NULL == angleslist.joint_arr) {
+		LOG_E("%s => angleslist.joint_arr malloc failed", __FUNCTION__);
+		goto errExit;
+		//return JNI_FALSE;
+	}
+
+	timeslist.joint_arr = (base_double_arr_t *)malloc(sizeof(base_double_arr_t)*timeslist.arr_num);
+	if(NULL == timeslist.joint_arr) {
+		LOG_E("%s => timeslist.joint_arr malloc failed", __FUNCTION__);
+		goto errExit;
+		//return JNI_FALSE;
+	}
+
+	for(int i=0; i<namelist.arr_num; i++) {
+		jstring strelement =(jstring)env->GetObjectArrayElement(names, i);
+		const char* chars=env->GetStringUTFChars(strelement, NULL);
+		snprintf(namelist.str_arr[i].str_a, MSGPACK_VALUE_STR_LEN, "%s", chars);
+		env->ReleaseStringUTFChars(strelement , chars);
+	}
+
+	LOG_I("----angleslist.arr_num----%d",angleslist.arr_num);
+	for(int i = 0; i<angleslist.arr_num; ++i) {
+	//	jobject floatArray = env->CallObjectMethod(angles, listGet, i);
+	//	jclass clsFloatArray = env->GetObjectClass(floatArray);
+	//	angleslist.joint_arr[i].para_num= env->GetArrayLength(angles);
+		jfloatArray floatArray =(jfloatArray)env->CallObjectMethod(angles, listGet, i);
+		angleslist.joint_arr[i].para_num= env->GetArrayLength(floatArray);
+		LOG_I("----angleslist.joint_arr[%d].para_num----%d", i, angleslist.joint_arr[i].para_num);
+		if(angleslist.joint_arr[i].para_num > 0) {
+			jfloat *jfloatAngles = env->GetFloatArrayElements(floatArray, NULL);
+			if(NULL == jfloatAngles) {
+				LOG_E("%s => angleslist failed", __FUNCTION__);
+				goto errExit;
+			   // return JNI_FALSE; /* exception occurred */
+			}
+			else {
+				for(int j=0; j<angleslist.joint_arr[i].para_num && j< SERIATION_ARRAY_MAX ; ++j) {
+					angleslist.joint_arr[i].double_arr[j] = jfloatAngles[j];
+					LOG_I("----angleslist.joint_arr[%d].double_arr[%d]----%f", i, j, angleslist.joint_arr[i].double_arr[j]);
+				}
+				env->ReleaseFloatArrayElements(floatArray, jfloatAngles, 0);
+			}
+		}
+	}
+
+	LOG_I("----timeslist.arr_num----%d",timeslist.arr_num);
+	for(int i = 0; i<timeslist.arr_num; ++i) {
+		jfloatArray floatArray = (jfloatArray)env->CallObjectMethod(times, tlistGet, i);
+		timeslist.joint_arr[i].para_num= env->GetArrayLength(floatArray);
+
+		if(timeslist.joint_arr[i].para_num > 0) {
+			jfloat *jfloatAngles = env->GetFloatArrayElements(floatArray, NULL);
+			if(NULL == jfloatAngles) {
+				LOG_E("%s => timeslist failed", __FUNCTION__);
+				goto errExit;
+			   // return JNI_FALSE; /* exception occurred */
+			}
+			else {
+				for(int j=0; j<timeslist.joint_arr[i].para_num && j< SERIATION_ARRAY_MAX ; ++j) {
+					timeslist.joint_arr[i].double_arr[j] = jfloatAngles[j];
+				}
+				env->ReleaseFloatArrayElements(floatArray, jfloatAngles, 0);
+			}
+		}
+	}
+
+    ret = angle_interpolation(packageNameStr, &namelist, &angleslist, &timeslist, absolute);
+
+errExit:
+    env->ReleaseStringUTFChars(packageName, packageNameStr);
+
+    if(namelist.str_arr) {
+		free(namelist.str_arr);
+	}
+
+    if(angleslist.joint_arr) {
+    	free(angleslist.joint_arr);
+    }
+
+    if(timeslist.joint_arr) {
+    	free(timeslist.joint_arr);
+    }
+
+    return ret;    
+}
+
+int angleInterpolationWithSpeed(JNIEnv*env, jobject jobj, jstring packageName, jobjectArray names, jobject angles, float max_speed, int absolute){
+    LOG_I("----angleInterpolationWithSpeed----");
+
+    jint ret = JNI_FALSE;
+
+	str_arr_t namelist = {0};
+	joint_double_arr_t angleslist ={0};
+	joint_double_arr_t timeslist ={0};
+
+	namelist.arr_num = env->GetArrayLength(names);
+	//class List
+	jclass angleslistCls = env->GetObjectClass(angles);
+	jmethodID listGet = env->GetMethodID(angleslistCls,"get","(I)Ljava/lang/Object;");
+	jmethodID listSize = env->GetMethodID(angleslistCls,"size","()I");
+	angleslist.arr_num = env->CallIntMethod(angles, listSize);
+
+	const char * packageNameStr = env->GetStringUTFChars(packageName , NULL);
+
+	if(namelist.arr_num <= 0 || angleslist.arr_num <= 0) {
+		LOG_E("%s => namelist.arr_num <= 0 || angleslist.arr_num <= 0", __FUNCTION__);
+		goto errExit;
+	}
+
+	namelist.str_arr = (str_t *)malloc(namelist.arr_num*MSGPACK_VALUE_STR_LEN);
+	if(NULL == namelist.str_arr) {
+		LOG_E("%s => namelist.str_arr malloc failed", __FUNCTION__);
+		goto errExit;
+		//return JNI_FALSE;
+	}
+
+	angleslist.joint_arr = (base_double_arr_t *)malloc(sizeof(base_double_arr_t)*angleslist.arr_num);
+	if(NULL == angleslist.joint_arr) {
+		LOG_E("%s => angleslist.joint_arr malloc failed", __FUNCTION__);
+		goto errExit;
+		//return JNI_FALSE;
+	}
+
+
+	for(int i=0; i<namelist.arr_num; i++) {
+		jstring strelement =(jstring)env->GetObjectArrayElement(names, i);
+		const char* chars=env->GetStringUTFChars(strelement, NULL);
+		snprintf(namelist.str_arr[i].str_a, MSGPACK_VALUE_STR_LEN, "%s", chars);
+		env->ReleaseStringUTFChars(strelement , chars);
+	}
+
+	LOG_I("----angleslist.arr_num----%d",angleslist.arr_num);
+	for(int i = 0; i<angleslist.arr_num; ++i) {
+	//	jobject floatArray = env->CallObjectMethod(angles, listGet, i);
+	//	jclass clsFloatArray = env->GetObjectClass(floatArray);
+	//	angleslist.joint_arr[i].para_num= env->GetArrayLength(angles);
+		jfloatArray floatArray =(jfloatArray)env->CallObjectMethod(angles, listGet, i);
+		angleslist.joint_arr[i].para_num= env->GetArrayLength(floatArray);
+		LOG_I("----angleslist.joint_arr[%d].para_num----%d", i, angleslist.joint_arr[i].para_num);
+		if(angleslist.joint_arr[i].para_num > 0) {
+			jfloat *jfloatAngles = env->GetFloatArrayElements(floatArray, NULL);
+			if(NULL == jfloatAngles) {
+				LOG_E("%s => angleslist failed", __FUNCTION__);
+				goto errExit;
+			   // return JNI_FALSE; /* exception occurred */
+			}
+			else {
+				for(int j=0; j<angleslist.joint_arr[i].para_num && j< SERIATION_ARRAY_MAX ; ++j) {
+					angleslist.joint_arr[i].double_arr[j] = jfloatAngles[j];
+					LOG_I("----angleslist.joint_arr[%d].double_arr[%d]----%f", i, j, angleslist.joint_arr[i].double_arr[j]);
+				}
+				env->ReleaseFloatArrayElements(floatArray, jfloatAngles, 0);
+			}
+		}
+	}
+
+	ret = angle_interpolation_with_speed(packageNameStr, &namelist, &angleslist, max_speed, absolute);
+
+errExit:
+	env->ReleaseStringUTFChars(packageName, packageNameStr);
+
+	if(namelist.str_arr) {
+		free(namelist.str_arr);
+	}
+
+	if(angleslist.joint_arr) {
+		free(angleslist.joint_arr);
+	}
+
+	return ret;
+}
+
+int setAngles(JNIEnv*env, jobject jobj, jstring packageName, jobjectArray names, jfloatArray angles,  jfloatArray times, int absolute){
+    LOG_I("----setAngles----");
+
+    jint ret = JNI_FALSE;
+
+    str_arr_t namelist = {0};
+    base_double_arr_t angleslist = {0};
+    base_double_arr_t timeslist = {0};
+
+	namelist.arr_num = env->GetArrayLength(names);
+	angleslist.para_num = env->GetArrayLength(angles);
+	timeslist.para_num = env->GetArrayLength(times);
+
+	if(namelist.arr_num <= 0 || angleslist.para_num <= 0 || timeslist.para_num <=0) {
+		LOG_E("%s => namelist.arr_num <= 0 || angleslist.para_num <= 0 || timeslist.para_num <=0", __FUNCTION__);
+		return ret;
+	}
+
+	namelist.str_arr = (str_t *)malloc(namelist.arr_num*MSGPACK_VALUE_STR_LEN);
+	if(NULL == namelist.str_arr){
+		LOG_E("%s => namelist.str_arr malloc failed", __FUNCTION__);
+		return ret;
+	}
+
+	for(int i=0; i<namelist.arr_num; i++) {
+		jstring strelement =(jstring)env->GetObjectArrayElement(names, i);
+		const char* chars=env->GetStringUTFChars(strelement, NULL);
+		snprintf(namelist.str_arr[i].str_a, MSGPACK_VALUE_STR_LEN, "%s", chars);
+		env->ReleaseStringUTFChars(strelement , chars);
+	}
+
+	jfloat *jfloatAngles = env->GetFloatArrayElements(angles, NULL);
+	if(jfloatAngles) {
+		for(int i=0; i<angleslist.para_num && i< SERIATION_ARRAY_MAX ; i++) {
+			angleslist.double_arr[i] = jfloatAngles[i];
+		}
+		env->ReleaseFloatArrayElements(angles, jfloatAngles, 0);
+	}
+	else {
+		 free(namelist.str_arr);
+		 LOG_E("%s => jfloatAngles GetFloatArrayElements-- failed", __FUNCTION__);
+		 return ret;
+	}
+
+	jfloat *jfloatTimes = env->GetFloatArrayElements(times, NULL);
+	if(jfloatTimes) {
+		for(int i=0; i<timeslist.para_num && i< SERIATION_ARRAY_MAX ; i++) {
+			timeslist.double_arr[i] = jfloatTimes[i];
+		}
+		env->ReleaseFloatArrayElements(times, jfloatTimes, 0);
+	}
+	else {
+		 free(namelist.str_arr);
+		 LOG_E("%s => jfloatTimes GetFloatArrayElements-- failed", __FUNCTION__);
+		 return ret;
+	}
+
+	const char * packageNameStr = env->GetStringUTFChars(packageName , NULL);
+
+//	LOG_I("----setAngles---- [%d, %f, %f]",angleslist.para_num, angleslist.double_arr[0], angleslist.double_arr[1]);
+
+    ret = set_angles(packageNameStr, &namelist,  &angleslist, &timeslist, absolute);
+
+    env->ReleaseStringUTFChars(packageName, packageNameStr);
+
+    free(namelist.str_arr);
+
+    return ret;    
+}
+
+int stopJoint(JNIEnv*env, jobject jobj, jstring packageName){
+    LOG_I("----stopJoint----");
+    jint ret = 0;
+	const char * str = env->GetStringUTFChars(packageName , NULL);
+	ret = stop_joint(str);
+	env->ReleaseStringUTFChars(packageName, str);
+
+    return ret;
+}
+
+float getJointCurrentAngle(JNIEnv*env, jobject jobj, jstring name){
+    LOG_I("----getJointCurrentAngle----");
+
+    const char * str = env->GetStringUTFChars(name , NULL);
+
+    float angle = get_joint_current_angle(str);
+
+    env->ReleaseStringUTFChars(name , str);
+
+    return angle;
+} 
+
+
+static JNINativeMethod gMethods[] = {
+        {"init", "()I", (void*)init},
+        {"deinit","()I",(void*)deinit},
+        {"moveToward", "(Ljava/lang/String;FFF)I", (void*)moveToward},
+        {"moveTo", "(Ljava/lang/String;FFFI)I", (void*)moveTo},
+        {"isMoveActive", "()I", (void*)isMoveActive},
+        {"stopMove", "(Ljava/lang/String;)I", (void*)stopMove},
+        {"getPosition", "(I)Lcom/ubtechinc/cruzr/coreservices/ros/Position;", (void*)getPosition},
+        {"getMaxSpeed", "(I)F", (void*)getMaxSpeed},
+        {"getBatteryInfo", "()Lcom/ubtechinc/cruzr/coreservices/ros/BatteryInfo;", (void*)getBatteryInfo},
+        {"getBodyNames", "(Ljava/lang/String;)[Ljava/lang/String;", (void*)getBodyNames},
+        {"getSensorNames", "()[Ljava/lang/String;", (void*)getSensorNames},
+        {"getLimits", "(Ljava/lang/String;)[Ljava/lang/String;", (void*)getLimits},
+        {"getRosWifiIp", "()Ljava/lang/String;", (void*)getRosWifiIp},
+        {"setRosWifi", "(Ljava/lang/String;Ljava/lang/String;)I", (void*)setRosWifi},
+        {"startPS3joy", "()I", (void*)startPS3joy},
+        {"run", "(Ljava/lang/String;[Ljava/lang/String;)I", (void*)run},
+        {"stopRun", "(Ljava/lang/String;)I", (void*)stopRun},
+        {"navigateTo", "(Ljava/lang/String;FFI)I", (void*)navigateTo},
+        {"cancelNavigate", "()I", (void*)cancelNavigate},        
+        {"gotoRecharge", "(FF)I", (void*)gotoRecharge},
+        {"leaveStation", "()I", (void*)leaveStation},
+        {"buildMap", "(II)I", (void*)buildMap},
+        {"setCurrentMap", "(Ljava/lang/String;)I", (void*)setCurrentMap},
+        {"getCurrentMap", "()Ljava/lang/String;", (void*)getCurrentMap},
+        {"syncToRos", "(FFF)I", (void*)syncToRos},
+        {"syncFromRos", "()Lcom/ubtechinc/cruzr/coreservices/ros/Position;", (void*)syncFromRos},
+        {"ledSetOnOff", "(I)I", (void*)ledSetOnOff},
+        {"ledSetWorkInfo", "(IIIII)I", (void*)ledSetWorkInfo},
+        {"powerOffRos", "()I", (void*)powerOffRos},
+        {"angleInterpolation", "(Ljava/lang/String;[Ljava/lang/String;Ljava/util/ArrayList;Ljava/util/ArrayList;I)I", (void*)angleInterpolation},
+        {"angleInterpolationWithSpeed", "(Ljava/lang/String;[Ljava/lang/String;Ljava/util/ArrayList;FI)I", (void*)angleInterpolationWithSpeed},
+        {"setAngles", "(Ljava/lang/String;[Ljava/lang/String;[F[FI)I", (void*)setAngles},
+        {"stopJoint", "(Ljava/lang/String;)I", (void*)stopJoint},
+        {"getJointCurrentAngle", "(Ljava/lang/String;)F", (void*)getJointCurrentAngle},
+};
+
+jint registerNativeMethods(JNIEnv* env, const char* className, JNINativeMethod* pMethodArray, int nMethodCnt)
+{
+	jclass clazz = env->FindClass(className);
+
+	if(clazz) {
+		return env->RegisterNatives(clazz, pMethodArray, nMethodCnt);
+	}
+
+	return JNI_ERR;
+}
+
+jint JNI_OnLoad(JavaVM* vm,void * reserved)
+{
+	LOG_I("JNI interface loaded start...");
+
+    JNIEnv *env = NULL;
+
+	if(vm->GetEnv((void**)&env,JNI_VERSION_1_4) != JNI_OK) { ////get JNIEnv form JavaVM
+		LOG_E("GetEnv fail");
+		return JNI_ERR;
+	}
+
+	if(registerNativeMethods(env, JAVA_REMOTE_CTRL_CLASS_NAME, gMethods, sizeof(gMethods)/sizeof(gMethods[0])) != JNI_OK) {
+		LOG_E("fail to register native methods");
+		return JNI_ERR;
+	}
+
+// Keep a reference on the Java VM.
+	gJavaVM = vm;
+
+	LOG_I("JNI interface loaded end.");
+	return JNI_VERSION_1_4;
+}
+
+
+void JNI_OnUnload(JavaVM* vm, void* reserved)
+{
+    JNIEnv* env = NULL;
+
+    if(vm->GetEnv((void**)&env,JNI_VERSION_1_4) != JNI_OK) {
+        return;
+    }
+
+    env->DeleteGlobalRef(callbackSet.thiz);
+}
